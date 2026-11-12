@@ -1,0 +1,55 @@
+name: Sync base template
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-base
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: develop
+          # Optional PAT: needed only if the base repo is private or the
+          # base adds/changes files in .github/workflows/.
+          token: ${{ secrets.BASE_SYNC_TOKEN || github.token }}
+
+      - name: Sync base files
+        env:
+          BASE_TOKEN: ${{ secrets.BASE_SYNC_TOKEN }}
+        run: bash scripts/sync-base.sh
+
+      - name: Open PR into develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Base has no changes. Nothing to do."
+            exit 0
+          fi
+          branch="chore/$(date -u +%Y%m%d)-base-sync"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A
+          git commit -m "chore: sync base template"
+          git push --force origin "$branch"
+          open_pr="$(gh pr list --head "$branch" --base develop --state open --json number --jq '.[0].number')"
+          if [ -z "$open_pr" ]; then
+            gh pr create --base develop --head "$branch" \
+              --title "chore: sync base template" \
+              --body "Automatic sync of base files from deenazar/lq-company-template (main). Overlay files are not touched. See WEB-TEMPLATE.md."
+          else
+            echo "PR #$open_pr already open; branch updated."
+          fi
